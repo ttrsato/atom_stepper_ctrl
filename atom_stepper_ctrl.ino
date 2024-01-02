@@ -27,12 +27,7 @@
 
 #include "M5Atom.h"
 #include "Unit_Encoder.h"
-#include "BluetoothSerial.h"
 #include <Ticker.h>
-
-BluetoothSerial SerialBT;
-
-// #define DEBUG_PRINT
 
 const int EN_PIN          = 22;
 const int DIR_PIN         = 23;
@@ -44,6 +39,19 @@ const int PULSE_WL        = 500;
 int pulse_wh = PULSE_WH;
 int pulse_wl = PULSE_WL;
 
+const int MOTOR_INTERVAL_MS = 1;
+
+static int motor_cnt = 0;
+static int last_motor_cnt = 0;
+
+enum {
+  ST_M_IDLE,
+  ST_M_H,
+  ST_M_L
+};
+
+static int motor_state = ST_M_IDLE;
+
 //const int ATOM_CMD = 0x01;
 Unit_Encoder sensor;
 unsigned long last_time = 0;
@@ -53,6 +61,8 @@ int last_btn_status;
 
 int delta_step = 1;
 bool step_en = false;
+
+int pos = 0;
 
 enum {
   LED_ENABLE  = 0x300000,
@@ -65,6 +75,8 @@ enum {BLK_STOP, BLK_H, BLK_L};
 Ticker blink_tick;
 volatile int blink_stat = BLK_STOP;
 int blink_color = LED_FAULT;
+
+Ticker motor_tick;
 
 void debugPrint(char *s)
 {
@@ -102,6 +114,7 @@ void setEnable(bool en)
     sensor.setLEDColor(2, 0x060600);
     step_en = true;
     Serial.println("E");
+    motor_tick.attach_ms(MOTOR_INTERVAL_MS, updateMotor);
   } else {
     digitalWrite(EN_PIN, HIGH);
     ets_delay_us(2);
@@ -110,6 +123,7 @@ void setEnable(bool en)
     sensor.setLEDColor(2, 0x000000);
     step_en = false;
     Serial.println("D");
+    motor_tick.detach();
   }
 }
 
@@ -129,10 +143,12 @@ void rotateStepper(int move_step)
       move_step--;
       digitalWrite(DIR_PIN, LOW);
       stepPulse();
+      pos += 1;
     } else if (move_step < 0) {
       move_step++;
       digitalWrite(DIR_PIN, HIGH);
       stepPulse();
+      pos -= 1;
     }
   }
   Serial.println(mstep);
@@ -195,22 +211,57 @@ void updateStatus()
   }
 }
 
+void setDirection(int dir)
+{
+  if (dir > 0)
+    digitalWrite(DIR_PIN, LOW);
+  else
+    digitalWrite(DIR_PIN, HIGH);
+}
+
+void updateMotor()
+{
+  if (motor_cnt != 0) {
+    switch (motor_state) {
+      case ST_M_IDLE:
+        setDirection(motor_cnt);
+        digitalWrite(STEP_PIN, HIGH);
+        motor_state = ST_M_H;
+        break;
+      case ST_M_H:
+        digitalWrite(STEP_PIN, LOW);
+        motor_state = ST_M_L;
+        break;
+      case ST_M_L:
+        motor_state = ST_M_IDLE;
+        if (motor_cnt > 0) motor_cnt--;
+        else if (motor_cnt < 0) motor_cnt++;
+        if (motor_cnt == 0) Serial.println(last_motor_cnt);
+        break;
+    }
+  }
+}
+
 void setup()
 {
   M5.begin(true, false, true);
   Serial.begin(115200);
   sensor.begin();
-  SerialBT.begin("ATOM-STEP");
+  // SerialBT.begin("ATOM-STEP");
   pinMode(EN_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
   pinMode(STEP_PIN, OUTPUT);
   pinMode(FAULT_PIN, INPUT);
   pinMode(VIN_PIN, INPUT);
+  digitalWrite(EN_PIN, LOW);
+  digitalWrite(DIR_PIN, LOW);
+  digitalWrite(STEP_PIN, LOW);
   setEnable(true);
   delay(100);
   last_encoder_value = sensor.getEncoderValue();
   last_btn_status    = sensor.getButtonStatus();
   sensor.setLEDColor(1, 0x00000f);
+  motor_tick.attach_ms(MOTOR_INTERVAL_MS, updateMotor);
 }
 
 void updateDeltaStep()
@@ -226,50 +277,8 @@ void updateDeltaStep()
 
 void loop()
 {
-  signed short int encoder_value = sensor.getEncoderValue();
-  bool btn_status                = sensor.getButtonStatus();
-
-  if (btn_status != last_btn_status) {
-    if (btn_status == 1) {
-      unsigned long cur_time = millis();
-      if (cur_time - last_time > 2000) {
-        setEnable(!step_en);
-      } else if (step_en) {
-        updateDeltaStep();
-      }
-    } else {
-      last_time = millis();
-    }
-  }
-
-  if (encoder_value != last_encoder_value) {
-    if (encoder_value > last_encoder_value) {
-      rotateStepper(+delta_step);
-    } else {
-      rotateStepper(-delta_step);      
-    }
-  }
-
-  last_encoder_value = encoder_value;
-  last_btn_status    = btn_status;
 
   String aStr;
-  if (SerialBT.available() > 0) {
-    aStr = SerialBT.readStringUntil('\n');
-    if (aStr.equals("s")) {
-      updateDeltaStep();
-    } else if (aStr.equals("E")) {
-      setEnable(true);
-    } else if (aStr.equals("D")) {
-      setEnable(false);
-    } else {
-      int cnt = aStr.toInt();
-      if (cnt != 0) {
-        rotateStepper(cnt);      
-      }
-    }
-  }
-  
   if (Serial.available() > 0) {
     aStr = Serial.readStringUntil('\n');
     if (aStr.equals("s")) {
@@ -278,13 +287,15 @@ void loop()
       setEnable(true);
     } else if (aStr.equals("D")) {
       setEnable(false);
+    } else if (aStr.equals("p")) {
+      Serial.print("p");
+      Serial.println(pos);
     } else {
-      int cnt = aStr.toInt();
-      if (cnt != 0) {
-        rotateStepper(cnt);      
+      if (motor_cnt == 0) {
+        last_motor_cnt = aStr.toInt();
+        motor_cnt = last_motor_cnt;
       }
     }
   }
-  
   M5.update();
 }
