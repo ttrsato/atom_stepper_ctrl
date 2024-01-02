@@ -1,0 +1,6 @@
+Need following library. Please install them by pip.
+
+customtkinter
+pyserial
+
+atom_focuser4.exe is for Windows10 or 11 (64bit only).
