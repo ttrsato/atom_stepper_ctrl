@@ -18,6 +18,7 @@ class App(ctk.CTk):
         self.W_STEP_MIN_C = 10
         self.W_STEP_MID_C = 50
         self.W_STEP_MAX_C = 100
+        self.AUTO_POFF_MIN = 5
 
         self.tm = NullHandler
 
@@ -112,13 +113,14 @@ class App(ctk.CTk):
         self.tm = NullHandler
 
     def tm_start(self):
-        self.tm = threading.Timer( 1 * 60 , self.tm_callback )
+        self.tm = threading.Timer(self.AUTO_POFF_MIN * 60 , self.tm_callback)
         self.tm.start()
 
     def tm_callback(self):
         self.tm_stop()
-        tk.messagebox.showerror('Msg', "Hello ")
-        self.tm_start()
+        self.sendCmd("D\n")
+        self.module_en = False
+        print("Module disabled")
             
     # Serial port
     def openClose(self):
@@ -131,11 +133,16 @@ class App(ctk.CTk):
                     self.sw_connect.select()
                     with open("atom_focuser4.conf", mode='w') as f:
                         f.write(com_sel)
+                    self.sendCmd("E\n")
+                    self.module_en = True
+                    print("Module enabled")
+                    self.tm_start()
                 else:
                     self.sw_connect.deselect()
                     print("Cannot open: " + com_sel)
                     tk.messagebox.showerror('Error', "Can't open " + com_sel)
             else:
+                self.tm_stop()
                 self.ser.close()
                 self.ser = None
                 print("Close: " + com_sel)
@@ -155,11 +162,18 @@ class App(ctk.CTk):
             return False
         
     def moveStep(self, step):
+        if not self.module_en:
+            self.sendCmd("E\n")
+            self.module_en = True
+            print("Module enabled")
+        else:
+            self.tm_stop()
         snd = str(step) + '\n'
         if self.sendCmd(snd):
             self.cur_pos += int(step)
             self.entry_pos.delete(0, tk.END)
             self.entry_pos.insert(tk.END, str(self.cur_pos))
+        self.tm_start()
 
     def inputPos(self, entry):
         new_pos = int(self.entry_pos.get())
