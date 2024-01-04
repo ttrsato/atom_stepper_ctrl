@@ -52,29 +52,17 @@ enum {
 
 static int motor_state = ST_M_IDLE;
 
-//const int ATOM_CMD = 0x01;
-Unit_Encoder sensor;
-unsigned long last_time = 0;
-
-int last_encoder_value;
-int last_btn_status;
-
 int delta_step = 1;
 bool step_en = false;
 
 int pos = 0;
 
 enum {
-  LED_ENABLE  = 0x300000,
-  LED_DISABLE = 0x003000,
-  LED_FAULT   = 0x707070,
+  LED_DISABLE = 0x000050,
+  LED_ENABLE  = 0x003000,
+  LED_FAULT   = 0x300000,
   LED_OFF     = 0x000000,
 };
-
-enum {BLK_STOP, BLK_H, BLK_L};
-Ticker blink_tick;
-volatile int blink_stat = BLK_STOP;
-int blink_color = LED_FAULT;
 
 Ticker motor_tick;
 
@@ -94,121 +82,43 @@ void debugPrint(int d)
 
 int isFault()
 {
+  static int last_fault = 0;
   int fault = digitalRead(FAULT_PIN) ? 0 : 1;
   int vin = digitalRead(VIN_PIN) ? 0 : 1;
-  if (fault) {
-    blink_color = LED_FAULT;
-  } else {
-    blink_color = LED_DISABLE;
+  int cur_fault = fault | vin;
+  if (cur_fault != last_fault) {
+    if (cur_fault) {
+      M5.dis.drawpix(0, LED_FAULT);
+    }
+    else {
+      if (step_en) M5.dis.drawpix(0, LED_ENABLE);
+      else M5.dis.drawpix(0, LED_DISABLE);
+    }
   }
-  return fault || vin;
+  last_fault = cur_fault;
+  return cur_fault;
 }
 
 void setEnable(bool en)
 {
   if (en) {
     digitalWrite(EN_PIN, LOW);
-    M5.dis.drawpix(0, LED_ENABLE);
     debugPrint("Enabled");
+    M5.dis.drawpix(0, LED_ENABLE);
     ets_delay_us(2);
-    sensor.setLEDColor(2, 0x060600);
     step_en = true;
     Serial.println("E");
     motor_tick.attach_ms(MOTOR_INTERVAL_MS, updateMotor);
   } else {
     digitalWrite(EN_PIN, HIGH);
     ets_delay_us(2);
-    M5.dis.drawpix(0, LED_DISABLE);
     debugPrint("Disabled");
-    sensor.setLEDColor(2, 0x000000);
+    M5.dis.drawpix(0, LED_DISABLE);
     step_en = false;
     Serial.println("D");
     motor_tick.detach();
   }
-}
-
-void stepPulse()
-{
-  digitalWrite(STEP_PIN, HIGH);
-  ets_delay_us(pulse_wh);
-  digitalWrite(STEP_PIN, LOW);
-  ets_delay_us(pulse_wl);
-}
-
-void rotateStepper(int move_step)
-{
-  int mstep = move_step;
-  while (move_step != 0) {
-    if (move_step > 0) {
-      move_step--;
-      digitalWrite(DIR_PIN, LOW);
-      stepPulse();
-      pos += 1;
-    } else if (move_step < 0) {
-      move_step++;
-      digitalWrite(DIR_PIN, HIGH);
-      stepPulse();
-      pos -= 1;
-    }
-  }
-  Serial.println(mstep);
-}
-
-enum {ST_ENABLE, ST_DISABLE, ST_FAULT};
-
-int state = ST_FAULT;
-
-void blink_toggle()
-{
-  if (blink_stat == BLK_H) {
-    M5.dis.drawpix(0, LED_OFF);  
-    blink_stat = BLK_L;
-  } else {
-    M5.dis.drawpix(0, blink_color);  
-    blink_stat = BLK_H;
-  }
-}
-
-void updateStatus()
-{
-  int is_fault = isFault();
-  int btn_was_pressed = M5.Btn.wasPressed();
-  if (is_fault) {
-    if (blink_stat == BLK_STOP) {
-      debugPrint("FAULT");
-      state = ST_FAULT;
-      blink_stat = BLK_H;
-      M5.dis.drawpix(0, blink_color);
-      blink_tick.attach(0.5, blink_toggle);
-      return;
-    }
-  } else {
-    switch (state) {
-      case ST_ENABLE:
-        if (btn_was_pressed) {
-          state = ST_DISABLE;
-          setEnable(false);
-        }
-        break;
-      case ST_DISABLE:
-        if (btn_was_pressed) {
-          state = ST_ENABLE;
-          setEnable(true);
-        }
-        break;
-      case ST_FAULT:
-        debugPrint("Exit fault");
-        state = ST_ENABLE;
-        blink_stat = BLK_STOP;
-        blink_tick.detach();
-        setEnable(true);
-        break;
-      default:
-        state = ST_ENABLE;
-        setEnable(true);
-        break;
-    }
-  }
+  isFault();
 }
 
 void setDirection(int dir)
@@ -246,8 +156,6 @@ void setup()
 {
   M5.begin(true, false, true);
   Serial.begin(115200);
-  sensor.begin();
-  // SerialBT.begin("ATOM-STEP");
   pinMode(EN_PIN, OUTPUT);
   pinMode(DIR_PIN, OUTPUT);
   pinMode(STEP_PIN, OUTPUT);
@@ -258,31 +166,23 @@ void setup()
   digitalWrite(STEP_PIN, LOW);
   setEnable(true);
   delay(100);
-  last_encoder_value = sensor.getEncoderValue();
-  last_btn_status    = sensor.getButtonStatus();
-  sensor.setLEDColor(1, 0x00000f);
   motor_tick.attach_ms(MOTOR_INTERVAL_MS, updateMotor);
-}
-
-void updateDeltaStep()
-{
-  switch (delta_step) {
-    case  1: delta_step = 5;  sensor.setLEDColor(1, 0x000900); break;
-    case  5: delta_step = 10; sensor.setLEDColor(1, 0x090000); break;
-    case 10: delta_step = 1;  sensor.setLEDColor(1, 0x00000f); break;
-  }
-  Serial.print("s");
-  Serial.println(delta_step);
 }
 
 void loop()
 {
-
   String aStr;
   if (Serial.available() > 0) {
     aStr = Serial.readStringUntil('\n');
     if (aStr.equals("s")) {
-      updateDeltaStep();
+      switch (isFault()) {
+        case 1: Serial.println("U");   break; // UVLO (VIN)
+        case 2: Serial.println("O");   break; // Overtemp / Overcurrent
+        case 3: Serial.println("OU"); break;  // UVLO and OV
+        default:
+          if (step_en) Serial.println("E");
+          else Serial.println("D");
+      }
     } else if (aStr.equals("E")) {
       setEnable(true);
     } else if (aStr.equals("D")) {
@@ -297,5 +197,6 @@ void loop()
       }
     }
   }
+  isFault();
   M5.update();
 }

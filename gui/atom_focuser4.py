@@ -1,7 +1,11 @@
+import os
 import tkinter as tk
 import customtkinter as ctk
 import serial
 from serial.tools import list_ports
+import time
+import threading
+from logging import NullHandler
 
 FONT_TYPE = "meiryo"
 
@@ -11,8 +15,14 @@ class App(ctk.CTk):
 
     def __init__(self):
         super().__init__()
-        self.W_STEP_MIN = 10
-        self.W_STEP_MAX = 20
+        self.W_STEP_MIN_C = 10
+        self.W_STEP_MID_C = 50
+        self.W_STEP_MAX_C = 100
+
+        self.tm = NullHandler
+
+        self.module_en = False
+
         self.ser = None
         self.cur_pos = 0
 
@@ -26,40 +36,55 @@ class App(ctk.CTk):
         self.setup_form()
 
         # イベント処理
-        self.bind("<MouseWheel>", self.wheelScrollingMin)
+        self.bind("<Control-MouseWheel>", self.wheelScrollingMin)
+        self.bind("<MouseWheel>", self.wheelScrollingMid)
         self.bind("<Shift-MouseWheel>", self.wheelScrollingMax)
-        self.bind("<Up>", self.cursorUpMin)
+        self.bind("<Control-Up>", self.cursorUpMin)
+        self.bind("<Up>", self.cursorUpMid)
         self.bind("<Shift-Up>", self.cursorUpMax)
-        self.bind("<Down>", self.cursorDownMin)
+        self.bind("<Control-Down>", self.cursorDownMin)
+        self.bind("<Down>", self.cursorDownMid)
         self.bind("<Shift-Down>", self.cursorDownMax)
         self.bind("<space>", self.markPoint1)
         self.bind("<Shift-space>", self.markPoint2)
-        self.bind("<c>", self.setCenterOfMark)
+        self.bind("<c>", self.setCenterOfMarkE)
     
     # Cursor / Mouse bind
     def cursorUpMin(self, event):
-        self.moveStep(-self.W_STEP_MIN)
+        self.moveStep(-self.W_STEP_MIN_C)
+
+    def cursorUpMid(self, event):
+        self.moveStep(-self.W_STEP_MID_C)
 
     def cursorUpMax(self, event):
-        self.moveStep(-self.W_STEP_MAX)
+        self.moveStep(-self.W_STEP_MAX_C)
 
     def cursorDownMin(self, event):
-        self.moveStep( self.W_STEP_MIN)
+        self.moveStep( self.W_STEP_MIN_C)
+
+    def cursorDownMid(self, event):
+        self.moveStep( self.W_STEP_MID_C)
 
     def cursorDownMax(self, event):
-        self.moveStep( self.W_STEP_MAX)
+        self.moveStep( self.W_STEP_MAX_C)
 
     def wheelScrollingMin(self, event):
         if (event.delta > 0):
-            self.moveStep( self.W_STEP_MIN)
+            self.moveStep( self.W_STEP_MIN_C)
         else:
-            self.moveStep(-self.W_STEP_MIN)
+            self.moveStep(-self.W_STEP_MIN_C)
+
+    def wheelScrollingMid(self, event):
+        if (event.delta > 0):
+            self.moveStep( self.W_STEP_MID_C)
+        else:
+            self.moveStep(-self.W_STEP_MID_C)
 
     def wheelScrollingMax(self, event):
         if (event.delta > 0):
-            self.moveStep( self.W_STEP_MAX)
+            self.moveStep( self.W_STEP_MAX_C)
         else:
-            self.moveStep(-self.W_STEP_MAX)
+            self.moveStep(-self.W_STEP_MAX_C)
     
     def updatePorts(self):
         ser_ports = list_ports.comports()   # Get port list
@@ -67,19 +92,34 @@ class App(ctk.CTk):
         return devices
     
     def markPoint1(self, event):
+        self.label_mk2_1.configure(text = self.label_mk1_1.cget("text"))
         self.label_mk1_1.configure(text = str(self.cur_pos))
 
     def markPoint2(self, event):
         self.label_mk2_1.configure(text = str(self.cur_pos))
 
     def setCenterOfMark(self):
-        new_pos = int((int(self.label_mk1_1.cget("text")) + int(self.label_mk1_1.cget("text"))) / 2)
+        new_pos = int((int(self.label_mk1_1.cget("text")) + int(self.label_mk2_1.cget("text"))) / 2)
         print("C:" + str(new_pos))
         self.moveStep(new_pos - self.cur_pos)
 
     def setCenterOfMarkE(self, event):
         self.setCenterOfMark()
 
+    def tm_stop(self):
+        self.tm.cancel()
+        del self.tm
+        self.tm = NullHandler
+
+    def tm_start(self):
+        self.tm = threading.Timer( 1 * 60 , self.tm_callback )
+        self.tm.start()
+
+    def tm_callback(self):
+        self.tm_stop()
+        tk.messagebox.showerror('Msg', "Hello ")
+        self.tm_start()
+            
     # Serial port
     def openClose(self):
         com_sel = self.ser_port_menu.get()
@@ -89,6 +129,8 @@ class App(ctk.CTk):
                 if self.ser != None:
                     print("Open: " + com_sel)
                     self.sw_connect.select()
+                    with open("atom_focuser4.conf", mode='w') as f:
+                        f.write(com_sel)
                 else:
                     self.sw_connect.deselect()
                     print("Cannot open: " + com_sel)
@@ -123,16 +165,6 @@ class App(ctk.CTk):
         new_pos = int(self.entry_pos.get())
         self.moveStep(new_pos - self.cur_pos)
 
-    def setScrollStep(self):
-        if self.W_STEP_MIN == 10:
-            self.W_STEP_MIN = 50
-            self.btn_scroll.configure(text = str(self.W_STEP_MIN))
-        elif self.W_STEP_MIN == 50:
-            self.W_STEP_MIN = 100
-        elif self.W_STEP_MIN == 100:
-            self.W_STEP_MIN = 10
-        self.btn_scroll.configure(text = str(self.W_STEP_MIN))
-
     def setup_form(self):
         # Fundamental    
         ctk.set_appearance_mode("dark")  # Modes: system (default), light, dark
@@ -150,8 +182,15 @@ class App(ctk.CTk):
 
         # Frame1
         # Seriap port
-        self.ser_port_menu = ctk.CTkOptionMenu(self.frame_1, values=self.updatePorts())
+        devs = self.updatePorts()
+        self.ser_port_menu = ctk.CTkOptionMenu(self.frame_1, values=devs)
         self.ser_port_menu.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        if os.path.isfile("atom_focuser4.conf"):
+            with open("atom_focuser4.conf", mode='r') as f:
+                last_dev = f.read()
+                for i in devs:
+                    if i == last_dev:
+                        self.ser_port_menu.set(last_dev)
         self.switch_var = ctk.StringVar(value="on")
         self.sw_connect = ctk.CTkSwitch(self.frame_1, text="Connect", command=self.openClose, onvalue="on", offvalue="off")
         self.sw_connect.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
@@ -162,8 +201,8 @@ class App(ctk.CTk):
         self.entry_pos = ctk.CTkEntry(self.frame_1, placeholder_text=str(self.cur_pos))
         self.entry_pos.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
         self.entry_pos.bind('<Return>', command=self.inputPos)
-        self.btn_scroll = ctk.CTkButton(self.frame_1, text="10", width=50, command=self.setScrollStep)
-        self.btn_scroll.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
+        # self.btn_scroll = ctk.CTkButton(self.frame_1, text="10", width=50, command=self.setScrollStep)
+        # self.btn_scroll.grid(row=1, column=2, padx=5, pady=5, sticky="ew")
 
         # Frame3
         self.label_mk1_0 = ctk.CTkLabel(self.frame_3, text="M1:")
